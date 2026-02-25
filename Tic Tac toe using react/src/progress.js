@@ -1,0 +1,58 @@
+// Persistent game progress — stored in localStorage
+const KEY = 'ttt_progress_v2';
+
+const DEFAULT = {
+    unlockedLevel: 'easy',       // 'easy' | 'normal' | 'impossible'
+    easy: { stages: Array(15).fill({ done: false, stars: 0 }) },
+    normal: { stages: Array(15).fill({ done: false, stars: 0 }) },
+    impossible: { stages: Array(15).fill({ done: false, stars: 0 }) },
+    scores: { wins: 0, losses: 0, draws: 0 },
+};
+
+function load() {
+    try {
+        const raw = localStorage.getItem(KEY);
+        if (!raw) return JSON.parse(JSON.stringify(DEFAULT));
+        return JSON.parse(raw);
+    } catch {
+        return JSON.parse(JSON.stringify(DEFAULT));
+    }
+}
+
+function save(state) {
+    localStorage.setItem(KEY, JSON.stringify(state));
+}
+
+export function getProgress() {
+    return load();
+}
+
+export function completeStage(difficulty, stageIndex, stars) {
+    const state = load();
+    const arr = state[difficulty].stages;
+    // Only update if new stars is better
+    const prev = arr[stageIndex] || { done: false, stars: 0 };
+    arr[stageIndex] = { done: true, stars: Math.max(prev.stars, stars) };
+
+    // Check if all 15 stages complete → unlock next
+    const allDone = arr.every(s => s.done);
+    if (allDone) {
+        if (difficulty === 'easy') state.unlockedLevel = 'normal';
+        if (difficulty === 'normal') state.unlockedLevel = 'impossible';
+    }
+    save(state);
+    return state;
+}
+
+export function recordScore(result) {
+    const state = load();
+    if (result === 'win') state.scores.wins++;
+    if (result === 'loss') state.scores.losses++;
+    if (result === 'draw') state.scores.draws++;
+    save(state);
+    return state;
+}
+
+export function resetProgress() {
+    save(JSON.parse(JSON.stringify(DEFAULT)));
+}

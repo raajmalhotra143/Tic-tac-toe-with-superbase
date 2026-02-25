@@ -1,0 +1,149 @@
+// Supabase backend service
+import { createClient } from '@supabase/supabase-js';
+
+const SUPABASE_URL = 'https://aoctclprstwwtrttqrcs.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFvY3RjbHByc3R3d3RydHRxcmNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE4NzA5MDgsImV4cCI6MjA4NzQ0NjkwOH0.3WIjvYMi85lUmlD9HTeB2mMAquw7Y98AXajY1RZr6hk';
+
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ---- Auth helpers -----------
+
+export async function signUp(email, password) {
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) throw error;
+    return data;
+}
+
+export async function signIn(email, password) {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data;
+}
+
+export async function signOut() {
+    await supabase.auth.signOut();
+}
+
+export function getUser() {
+    return supabase.auth.getUser();
+}
+
+// ---- Game room helpers -------
+
+/** Create a new game room, return the room id */
+export async function createRoom(hostId, hostEmoji) {
+    const { data, error } = await supabase
+        .from('rooms')
+        .insert({
+            host_id: hostId,
+            host_emoji: hostEmoji,
+            board: ['', '', '', '', '', '', '', '', ''],
+            turn: 'host',
+            status: 'waiting',
+        })
+        .select()
+        .single();
+    if (error) throw error;
+    return data;
+}
+
+/** Join an existing waiting room */
+export async function joinRoom(roomId, guestId, guestEmoji) {
+    const { data, error } = await supabase
+        .from('rooms')
+        .update({ guest_id: guestId, guest_emoji: guestEmoji, status: 'playing' })
+        .eq('id', roomId)
+        .eq('status', 'waiting')
+        .select()
+        .single();
+    if (error) throw error;
+    return data;
+}
+
+/** Join a room using its 6-char room code */
+export async function joinRoomByCode(roomCode, guestId, guestEmoji) {
+    const { data: rooms, error: findErr } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('room_code', roomCode.toUpperCase().trim())
+        .eq('status', 'waiting')
+        .limit(1);
+    if (findErr) throw findErr;
+    if (!rooms || rooms.length === 0) throw new Error('Room not found or already started');
+    const room = rooms[0];
+    if (room.host_id === guestId) throw new Error("You can't join your own room");
+    return joinRoom(room.id, guestId, guestEmoji);
+}
+
+/** Find first available waiting room (matchmaking) */
+export async function findWaitingRoom(userId) {
+    const { data, error } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('status', 'waiting')
+        .neq('host_id', userId)
+        .order('created_at', { ascending: true })
+        .limit(1);
+    if (error) throw error;
+    return data?.[0] || null;
+}
+
+/** Update board and turn for a room */
+export async function updateRoom(roomId, updates) {
+    const { error } = await supabase
+        .from('rooms')
+        .update(updates)
+        .eq('id', roomId);
+    if (error) throw error;
+}
+
+/** Subscribe to room changes (Supabase Realtime) */
+export function subscribeRoom(roomId, callback) {
+    return supabase
+        .channel(`room:${roomId}`)
+        .on(
+            'postgres_changes',
+            { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` },
+            (payload) => callback(payload.new)
+        )
+        .subscribe();
+}
+
+/** Send a chat message */
+export async function sendChat(roomId, userId, userName, message) {
+    const { error } = await supabase
+        .from('chats')
+        .insert({ room_id: roomId, user_id: userId, user_name: userName, message });
+    if (error) throw error;
+}
+
+/** Subscribe to chat messages for a room */
+export function subscribeChat(roomId, callback) {
+    return supabase
+        .channel(`chat:${roomId}`)
+        .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'chats', filter: `room_id=eq.${roomId}` },
+            (payload) => callback(payload.new)
+        )
+        .subscribe();
+}
+
+// ---- Leaderboard helpers -----
+
+export async function upsertScore(userId, email, wins, losses, draws) {
+    const { error } = await supabase
+        .from('leaderboard')
+        .upsert({ user_id: userId, email, wins, losses, draws }, { onConflict: 'user_id' });
+    if (error) throw error;
+}
+
+export async function getLeaderboard() {
+    const { data, error } = await supabase
+        .from('leaderboard')
+        .select('*')
+        .order('wins', { ascending: false })
+        .limit(20);
+    if (error) throw error;
+    return data;
+}
